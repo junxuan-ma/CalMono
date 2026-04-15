@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+src/calmono/__init__.py
+src/calmono/ifmatch.py
+src/calmono/imgimport.py
+src/calmono/imgseg.py
+src/calmono/siganalysis.py
+src/calmono.egg-info/PKG-INFO
+src/calmono.egg-info/SOURCES.txt
+src/calmono.egg-info/dependency_links.txt
+src/calmono.egg-info/requires.txt
+src/calmono.egg-info/top_level.txt

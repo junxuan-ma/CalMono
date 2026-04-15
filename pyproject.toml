@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=82.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "calmono"
+version = "0.0.1"
+description = "Calcium imaging analysis of bovine DRG neurons"
+authors = [
+  { name="Junxuan Ma", email="Junxuan.Ma@aofoundation.org" }
+]
+dependencies = [
+  "czifile>=2026.3.0",
+  "numpy >= 1.26",
+   "scipy >= 1.11",
+   "pandas >= 2.2",
+   "matplotlib >= 3.8",
+   "seaborn >= 0.13",
+   "scikit-learn >= 1.4",
+   "opencv-python >= 4.9",
+]
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent"
+]
+license = {text = "MIT"}
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
