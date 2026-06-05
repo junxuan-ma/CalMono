@@ -6,9 +6,8 @@ Created on Sun Feb 22 12:06:27 2026
 
 
 ---------------------To install calmono, run:------------------------------
-py -m pip install --index-url https://test.pypi.org/simple/ calmono==0.0.3
-in PowerShell
-
+---------------------in PowerShell-----------------------------------------
+python -m pip install calmono 
 
 """
 import inspect
