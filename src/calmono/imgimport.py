@@ -1,61 +1,72 @@
 # -*- coding: utf-8 -*-
 """
 Created on Fri Feb 20 20:14:33 2026
+Revised on Sun Oct 04 13:02:40 2026
 
 @author: Junxuan Ma
 """
 
-import glob
 import czifile
 import numpy as np
-import cv2
 import os
 
 #Read confocal files
 """
-To automate import, match IF (immunofluorescence) with calcium imaging with the same Sample Name.
-Specifically: IF is in a form of "IF_sample_name.czi".
-And Calcium imaging is in a form of "Cal_sample_name.czi".
-The sample name would be "sample_name.czi" .
-Note that the IF_ or Cal_ tag has to be before the same sample name.
+imgimport.FetchFiles:
+    First fetch all the CZI file names in the folder, they should be calcium imaging files.
+        Import one of the file out of the file names, e.g., a calcium imaging file.
 
-All the calcium imaging files and IF files are stored in the folder defined by the input Local_path
-Since the files are very large and there is no memory to store all simutaneously, it has to be read one and analyze, then read the next.
+    Then replace the calcium imaging tag with the IF tag to get the corresponding IF file name.
+        Import the IF file in the corresponding folder storing IF files.
 
+Example:
+    Specifically: IF is in a form of "IF_sample_name.czi".
+    And Calcium imaging is in a form of "Cal_sample_name.czi".
+    The sample name would be "sample_name.czi" .
+    ***Note that the tags are case-insensitive in windows. Avoid another tag with different case (capitalization: avoid "if_Cal.czi" for both IF_ and Cal_ will fetch this file).
+
+Storage of the files:
+    Calcium imaging and IF files can be stored in the same folder or different folders. 
+    If they are in the same folder, then folder_path_cal and folder_path_if can be the same.
+
+General analysis pipeline design:
+    Since the files are very large and there is no memory to store all simutaneously, it has to be read one and analyze, then read the next.
+
+Detailed instruction of use:
 Thus the Auto_ImportCZI contains 2 steps:
-    1. Fetch_Files: list all files representing all samples
-    Inputs (parameters): 
-    --------
-    Local_path: the local directory of the image files
-    Cal_tag: the string pattern in the file name that can be used to distinguish Calcium imaging from IF
-    IF_tag: the string pattern specific for IF file
-        Note: calcium imaging file name can be switched to IF file name
-        by changing Cal_tag to IF_tag 
-    
-    Outputs (attributes):
-    ---------
-    Get_cal_files: a function to call all the calcium imaging file names.
-    Get_if_files: a function to call all the IF file names
+    Fetch_Files: list all file names representing all Samples
+
+        Inputs (parameters): 
+            file_path: the local directory of the image files (can be either calcium imaging or IF files).
+            file_tag: 
+                If calcium imaging and IF files are in the same folder, then file_tag should be "Cal_" or "IF_" to distinguish the two types of files.
+                If calcium imaging and IF files are in different folders, then file_tag can be ".czi" to fetch all files in the folder, since they are already separated by folder.
+
+        
+        Outputs (attributes):
+            Get_filenames: a function to call all the calcium imaging/IF file names.
         
     
-    2. ImportCZI: choose one to import and make it easy for iteration
-    Notice that the IF and calcium imaging file names have to be well matched.
-    The only difference is their tags before the sample name.
-    Inputs (parameters): 
-    --------
-    local_path: the local directory of the image files
-    Cal_name: the filename of one calcium imaging chosen for analysis
-    Cal_tag: the string pattern in the file name that can be used to distinguish Calcium imaging from IF
-    IF_tag: the string pattern specific for IF file
-        Note: calcium imaging file name can be switched to IF file name
-        by changing Cal_tag to IF_tag 
-    
-    Outputs (attributes):
-    ---------
-    Read_if: input which channel index is "CGRP" and which is "NF". 
-        output the CGRP and NF image file in np.ndarray, respectively.
-    Read_cal: output the raw calcium imaging data as np.ndarray
-        and the pixel size of the image in a list of (height, width).
+    ImportCZI: choose one to import and make it easy for iteration
+        Inputs (parameters): 
+            folder_path_cal: the local directory of the calcium image file names
+            folder_path_if: the local directory of the IF image file names.
+            Cal_name: the filename of one calcium imaging chosen for analysis.
+            Cal_tag: the string pattern in the file name to distinguish Calcium imaging from IF
+            IF_tag: the string pattern specific for IF file
+
+        
+        Outputs (attributes):
+            Read_if: 
+                Import the IF file and output the CGRP and NF image file in np.ndarray, respectively.
+                Inputs: which channel index is "CGRP" and which is "NF". 
+                Output: the CGRP and NF image file in np.ndarray, respectively.
+                    
+                    Example: CGRP_raw, NF_raw= ImportCZI.Read_if(CGRP= 1, NF= 0)
+
+            Read_cal: 
+                Output: the raw calcium imaging data as np.ndarray
+                and the pixel size of the image in a list of (time, height, width).
     
     
 Note the read_image function needs to be adapted based on the format of image
@@ -67,48 +78,40 @@ from pathlib import Path
 class FetchFiles:
     def __init__(
         self,
-        local_path: str,
-        cal_tag: str = "Cal",
-        if_tag: str = "IF",
+        file_path: str,
+        file_tag: str = "Cal",
     ) -> None:
-        self._path = Path(local_path)
-        self._cal_tag = cal_tag
-        self._if_tag = if_tag
+        self._path = Path(file_path)
+        self._tag = file_tag
 
         if not self._path.exists():
             raise FileNotFoundError(f"Path does not exist: {self._path}")
 
     # ---------- Internal logic ----------
     def _get_filenames(self, tag: str):
-        return [f.name for f in self._path.glob(f"{tag}*.czi")]
+        return [f.name for f in self._path.glob(f"*{tag}*.czi")]
 
     # ---------- Public API ----------
-    def Get_cal_files(self):
-        return self._get_filenames(self._cal_tag)
+    def Get_filenames(self):
+        return self._get_filenames(self._tag)
 
-    def Get_if_files(self):
-        return self._get_filenames(self._if_tag)
+
     
 
-#Step 2, choose one to import and make it easy for iteration
+# Step 2, choose one to import and make it easy for iteration
 class ImportCZI():    
     def __init__(self, 
-                 local_path: str,
+                 folder_path_cal: str,
+                 folder_path_if: str,
                  Cal_name: str = 'Cal_Donor1_Day2_G5_b5_2.czi',
                  cal_tag: str = "Cal",
-                 if_tag: str = "IF"):
-        self._path = Path(local_path)
-        self.Cal_name = self._path / Cal_name #Full path object, not just file name
-        self._cal_tag = cal_tag
-        self._if_tag = if_tag
+                 if_tag: str = "IF"): 
+        IF_name = Cal_name.replace(cal_tag, if_tag)
+        self.Cal_name = Path(folder_path_cal) / Cal_name #Full path object, not just file name
+        self.IF_name = Path(folder_path_if) / IF_name #Full path object, not just file name
+
         
-        #To ensure correspondence, IF path is derived from Cal by changing tag
-        self.IF_name = self.Cal_name.with_name(#Full path object
-            self.Cal_name.name.replace(self._cal_tag, self._if_tag)
-        )#Full path object, not just file name
         
-        self._if_data = np.squeeze(czifile.imread(self.IF_name))
-        self._cal_data = np.squeeze(czifile.imread(self.Cal_name))
         
     # ---------- Internal logic ----------
     def _read_IF(self, CGRP: int, NF: int) ->tuple[np.ndarray,np.ndarray]:
@@ -126,11 +129,15 @@ class ImportCZI():
         return self._cal_data.shape
     
     # ---------- Public API ----------
-    
+    def IF_exists(self) -> bool:
+        return os.path.exists(self.IF_name)
+
     def Read_if(self, CGRP: int, NF: int)->tuple[np.ndarray,np.ndarray]:
+        self._if_data = np.squeeze(czifile.imread(self.IF_name))
         return self._read_IF(CGRP,NF)
     
-    def Read_cal(self) -> np.ndarray:
+    def Read_cal(self) -> tuple[np.ndarray, tuple[int, ...]]:
+        self._cal_data = np.squeeze(czifile.imread(self.Cal_name))
         return self._read_Cal(), self._cal_shape()
             
             

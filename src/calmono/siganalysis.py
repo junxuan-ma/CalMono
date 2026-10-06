@@ -9,16 +9,13 @@ Created on Mon Mar 16 14:57:14 2026
 """
 SigProcess: class
 The signal processing is composed of the following steps
-1. Normalization of the time series. Plotting of the time series curve is useful
-    for defining the baseline time window.
-2. Low pass filter to reduce the influence from high frequency noise. Plotting the 
-    effect of low pass filter is useful for defining butter filter parameters,
-    namely the cutoff and order.  
-3. Linear correction to reduce the effect of photobleaching. Plotting the correction
-    can help in understanding if the correction is correctly done. This is espectially
-    important when the calcium imaging lasts very long that the photobleaching effect
-    is no longer linear.
-Output from step 3 is used for peak height based quantification
+1. Normalization of the time series. Plotting of the time series curve is useful for defining the baseline time window.
+2. Low pass filter to reduce the influence from high frequency noise. Plotting the effect of low pass filter is useful for defining butter filter parameters, namely the cutoff and order.  
+3. Linear correction to reduce the effect of photobleaching. Plotting the correction can help in understanding if the correction is correctly done. This is espectially important when the calcium imaging lasts very long that the photobleaching effect is no longer linear.
+Output from step 3 is directlyused for peak height based quantification.
+
+Also, optionally correct the background change due to adding stimulus or neutrophil response. 
+
   
 4. Deconvolution. Assuming that intracellular calcium veriations are caused mainly by
     a summation, i.e., convolution, of action potentials (APs). Deconvolution helps in 
@@ -57,6 +54,9 @@ class SigProcess:
             Subtract_linear_baseline, a function to perform photobleaching correction.
             Substract_linear_pick_column_plot, a curve plotting function to confirm
                 effect of Subtract_linear_baseline
+
+            Extract_extr_base, a function that first do photobleach correction and then extract extracellular background from a 2D array of time series.
+            Extr_background_substract, a function to perform photobleach correction first, then remove extracellular background (background also photobleach-corrected).
                 
             Kernels_plot and Decon_para_plot, deconvolution related plotting functions
             Decon, scipy-based deconvolution; Decon_fast, fft based deconvolution (faster).
@@ -65,7 +65,7 @@ class SigProcess:
             raise ValueError("Calcium_imaging must be a 2D NumPy array (time x features).")
         if Calcium_imaging.shape[1] != df_cluster.shape[0]:
                 raise ValueError(
-                    f"Row mismatch: Calcium_imaging has {Calcium_imaging.shape[0]} rows, "
+                    f"Row mismatch: Calcium_imaging has {Calcium_imaging.shape[1]} columns, "
                     f"but df_cluster has {df_cluster.shape[0]} rows."
                     f"The calcium imaging is not aligned with the DataFrame of neuronal segmentation"
                 )
@@ -88,7 +88,7 @@ class SigProcess:
             """
         clusters = reference_df["Cluster"].unique()
         averaged_array = np.zeros((calcium_imaging.shape[0], len(clusters)))
-	reference_df = reference_df.reset_index(drop=True)
+        reference_df = reference_df.reset_index(drop=True)
         for i, cluster in enumerate(clusters):
             indices = reference_df.index[reference_df["Cluster"] == cluster].tolist()
             # Take mean across selected columns (axis=1 = time dimension)
@@ -250,14 +250,18 @@ class SigProcess:
     
         
     """-------------------------------Photobleaching correction------------------------------""" 
-    def Subtract_linear_baseline(self, array, linear_fit_start, linear_fit_end):
+    def Subtract_linear_baseline(self, 
+                                 array: np.ndarray,
+                                 linear_fit_start: int, 
+                                 linear_fit_end: int
+                                 ):
         """
         Subtract linear baseline from each column (neuron) in a 2D array (time x neurons)
         fully vectorized: each neuron gets its own linear fit.
 
         Parameters:
             array : np.ndarray
-                2D array of shape (time, neurons)
+                1D array of shape (time,) or 2D array of shape (time, neurons)
             linear_fit_start : int
                 Start index of baseline window
             linear_fit_end : int
@@ -269,6 +273,9 @@ class SigProcess:
             background : np.ndarray
                 Linear background array (same shape)
                 """
+        was_1d = (array.ndim == 1)
+        if was_1d:
+            array = array[:, None]
         time = np.arange(array.shape[0])[:, None]  # shape (time,1)
         fit_time = np.arange(linear_fit_start, linear_fit_end)  # baseline indices
         # Extract baseline segment
@@ -281,6 +288,9 @@ class SigProcess:
         # Compute background for all time points
         background = slope[None, :] * time + intercept[None, :]
         corrected = array - background
+        if was_1d:
+            corrected = corrected[:, 0]
+            background = background[:, 0]
 
         return corrected, background
     
@@ -300,16 +310,75 @@ class SigProcess:
         plt.ylabel("Signal (ΔF/F0)")
         plt.legend()
         plt.tight_layout()
-        
+
+
+
+    """-------------------Extracellular background correction--------------------------
+    Remove the extracellular/neuropil background contamination from each neuron's trace.
+    Notice that even the extracellular/neuropil background need a linear correction for it has photobleach as well
+    """
+    def Extract_extr_base(self, Cal_background:np.ndarray,
+                                 def_base_start: int, 
+                                 def_base_end: int):
+         #averaging over pixels
+         base= Cal_background.mean(axis=1)
+         #normalization
+         baseline = base[def_base_start:def_base_end].mean()
+         return (base - baseline) / baseline   
+
+
+    def Extr_background_substract(self, 
+                                  array: np.ndarray,
+                                  extr_background:np.ndarray,#e.g., (4200,)
+                                  linear_fit_start: int, 
+                                  linear_fit_end: int
+                                  ):
+         corrected_array,_ =self.Subtract_linear_baseline(array, linear_fit_start, linear_fit_end)
+         corrected_base,_= self.Subtract_linear_baseline(extr_background, linear_fit_start, linear_fit_end)
+
+         # (4200,) -> (4200, 1) for broadcasting
+         # (4200,1191)-(4200, 1) is correct, while (4200,1191)-(4200,) will be infact (1191)-(4200)
+         corrected_base = corrected_base.reshape(-1, 1)  
+         return corrected_array-corrected_base, corrected_base
+
+    def Substract_background_plot(self, array, 
+                             extr_background,
+                             linear_fit_start, 
+                             linear_fit_end,
+                             column_index, 
+                             figsize=(30,5)):
+            
+            corrected,background = self.Extr_background_substract(
+                array, extr_background,
+                linear_fit_start, linear_fit_end
+                )
+            
+            time = np.arange(array.shape[0])
+            plt.figure(figsize=figsize)
+            plt.plot(time, array[:, column_index], label="Original Signal", color="blue", alpha=0.6)
+            plt.plot(time, background, label="Extracellular Background", color="orange", linewidth=2)
+            plt.plot(time, corrected[:, column_index], label="Corrected Signal", color="red", linewidth=1)
+            plt.axhline(0, color='green', linestyle='--', alpha=0.5)
+    
+            plt.title(f"Column {column_index} Linear Baseline Correction")
+            plt.xlabel("Time frame")
+            plt.ylabel("Signal (ΔF/F0)")
+            plt.legend()
+            plt.tight_layout()
+         
+
+
+
+         
    
-    """-----------------------------Deconvolution-----------------------------------------"""
+    """------------Deconvolution---------------------"""
     def _get_exp_kernel(self, length:float, tao:float):
         time = np.arange(length)
         kernel = np.exp(-time / tao)
         return time, kernel
 
     def Kernels_plot(self, length_list:list, tao_list:list,figsize:list=(20,5)):
-        fig, axs = plt.subplots(len(length_list), len(tao_list), 
+        _, axs = plt.subplots(len(length_list), len(tao_list), 
                         figsize=(len(tao_list)*figsize[0], len(length_list)*figsize[1] ))
         axs = np.atleast_2d(axs)
         for i, kernel_length in enumerate(length_list):
@@ -334,7 +403,7 @@ class SigProcess:
         
         for i, kernel_length in enumerate(length_list):
             for j, kernel_tao in enumerate(tao_list):
-                ker_time, kernel = self._get_exp_kernel(kernel_length, kernel_tao)
+                _, kernel = self._get_exp_kernel(kernel_length, kernel_tao)
                 deconv, remainder = deconvolve(curve, kernel)
                 axs[i,j].plot(time[:len(deconv)], curve[:len(deconv)], 'b', label='data')
                 axs[i,j].plot(time[:len(deconv)], deconv, 'r', label='deconv')
@@ -383,7 +452,7 @@ class SigProcess:
 
 
 
-"""--------------------------------------Signal quantification--------------------------------
+"""----Signal quantification--------------------------------
 Sigquanti: class
 
 Frequency (i.e., spiking rate) based quantification is composed of the following steps
@@ -443,7 +512,7 @@ class Sigquanti:
         curve= self.cal[time_start:time_end, pixel_index]
         peaks, _= find_peaks(curve, height= spike_h_cutoff)
         
-        fig, ax = plt.subplots(figsize=figsize)
+        _, ax = plt.subplots(figsize=figsize)
         ax.plot(time, curve)
         ax.plot(time[peaks], curve[peaks],"x",color = "purple", label="Spikes")
         ax.axhline(spike_h_cutoff, color='red', linestyle='--', alpha=0.5, label="Threshold")
@@ -474,7 +543,7 @@ class Sigquanti:
         return peaks_mask.sum(axis=0) / (y.shape[0] / fs)
     
     def _heatmap_matrix_from_df(self, value):
-        v= value.ravel()
+        v = np.asarray(value).ravel()
         if self.df.shape[0] != len(v):
             raise ValueError(
                 f"Row mismatch: the quantified values per pixel shows {len(v)} pixels, "
@@ -496,7 +565,7 @@ class Sigquanti:
         freq= self._freq_calculator_array(self.cal, spike_h_cutoff, seg_start, seg_end, fs)
         img = self._heatmap_matrix_from_df(freq)
         plt.figure(figsize=(self.height/5, self.width/5))
-        plt.imshow(img, cmap='hot', origin='lower', interpolation='none', aspect='equal')
+        plt.imshow(img, cmap='hot', origin='upper', interpolation='none', aspect='equal')
 
         
     def IF_freq_heatmap(self, 
@@ -514,29 +583,31 @@ class Sigquanti:
         ax=axes[0]
         freq= self._freq_calculator_array(self.cal, spike_h_cutoff, seg_start, seg_end, fs)
         img = self._heatmap_matrix_from_df(freq)
-        ax.imshow(img, cmap='hot', origin='lower', interpolation='none', aspect='equal')
+        ax.imshow(img, cmap='hot', origin='upper', interpolation='none', aspect='equal')
         
         ax.set_title("Spiking frequncy", fontsize=60)
         ax.axis('off')
         
         ax=axes[1]
-        ax.imshow(cgrp, origin='lower', interpolation='none', aspect='equal')
+        ax.imshow(cgrp, origin='upper', interpolation='none', aspect='equal')
         ax.set_title("CGRP", fontsize=60)
         ax.axis('off')
         
         ax=axes[2]
-        ax.imshow(nf, origin='lower', interpolation='none', aspect='equal')
+        ax.imshow(nf, origin='upper', interpolation='none', aspect='equal')
         ax.set_title("NF", fontsize=60)
         ax.axis('off')
         
         plt.tight_layout()
         
 
-    def Freq_data_output(self, df: pd.DataFrame,
-                      colname:str,#how do you call this data? e.g., spikeing rate (Hz))
-                      spike_h_cutoff: float, #peak height cutoff used to define calcium spikes
-                      seg_start: int, seg_end: int, #pick a time window to calculate spike frequency
-                      fs:float):
+    def Freq_data_output(
+            self, 
+            df: pd.DataFrame,
+            colname:str,#how do you call this data? e.g., spikeing rate (Hz))
+            spike_h_cutoff: float, #peak height cutoff used to define calcium spikes
+            seg_start: int, seg_end: int, #pick a time window to calculate spike frequency
+            fs:float):
         """The Dataframe with XY pixel infor you use to store the data.
            Usually make a copy of _IF_match output.
            Notice that this df's row number have to be the same as the class input df_clust
@@ -548,12 +619,12 @@ class Sigquanti:
                     f"The Dataframe you use to store the quantification does not align with the calcium imaging data analyzed"
                 )
         freq= self._freq_calculator_array(self.cal, spike_h_cutoff, seg_start, seg_end, fs)
-        merged = self.df
+        merged = df
         merged[colname]=freq
         
         return merged
 
-    """--------------------------------Peak height based quantification--------------------------
+    """------Peak height based quantification--------------------------
     
         Important notes:      
             1. These window definitions can be learnt from Sigprocess(...).Pre_curve_plot(...)
@@ -588,7 +659,7 @@ class Sigquanti:
         ph= self._peak_height_array(self.cal, base_start, base_end, sti_start, sti_end)
         img = self._heatmap_matrix_from_df(ph)
         plt.figure(figsize=(self.height/5, self.width/5))
-        im = plt.imshow(img, cmap='hot', origin='lower', interpolation='none', aspect='equal')
+        im = plt.imshow(img, cmap='hot', origin='upper', interpolation='none', aspect='equal')
         
         cbar= plt.colorbar(im, shrink=0.4)
         cbar.set_label(label='Peak height (a.u.)',fontsize=70)
@@ -596,10 +667,12 @@ class Sigquanti:
         
         
         
-    def Peak_height_output(self, df: pd.DataFrame,
-                     colname:str,#how do you call this data? e.g., peak height (a.u.))
-                     base_start: int, base_end: int,
-                     sti_start: int, sti_end: int):
+    def Peak_height_output(
+            self, 
+            df: pd.DataFrame,
+            colname:str,#how do you call this data? e.g., peak height (a.u.))
+            base_start: int, base_end: int,
+            sti_start: int, sti_end: int):
         """df is the Dataframe with XY pixel infor you use to store the data.
           Usually make a copy of _IF_match output.
           Notice that this df's row number have to be the same as the class input df_clust
@@ -611,7 +684,7 @@ class Sigquanti:
                    f"The Dataframe you use to store the quantification does not align with the calcium imaging data analyzed"
                )
         ph= self._peak_height_array(self.cal, base_start, base_end, sti_start, sti_end)
-        merged = self.df
+        merged = df
         merged[colname]=ph
        
         return merged 
