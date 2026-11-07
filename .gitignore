@@ -1,0 +1,28 @@
+@'
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment
+.env/
+.env.local/
+venv/
+.venv/
+
+
+# Python build
+build/
+dist/
+*.egg-info/
+
+# Logs
+*.log
